@@ -1,0 +1,220 @@
+"""Canonical Snakemake DAG for the spatial full-length transcriptome workflow."""
+
+configfile: "config/run.yaml"
+
+from pathlib import Path
+
+CFG = config
+SAMPLE = CFG.get("sample_id", "EXAMPLE_SAMPLE")
+OUT = Path(CFG.get("outputs_root", "outputs")) / SAMPLE
+LOG = Path(CFG.get("log_root", "log")) / SAMPLE
+
+
+def stage(stage_name, filename):
+    return str(OUT / stage_name / filename)
+
+
+def cfg_path(key):
+    return str(CFG[key])
+
+
+rule all:
+    input:
+        stage("10_report", f"{SAMPLE}_report.html"),
+        stage("10_report", "delivery_manifest.tsv"),
+        stage("10_report", "run_metadata.json"),
+
+
+rule input_qc:
+    input:
+        raw=cfg_path("raw_fastq"),
+        whitelist=cfg_path("whitelist_csv"),
+        bbox=cfg_path("bbox_csv"),
+        positions=cfg_path("barcode_to_pos_h5"),
+        genome=cfg_path("genome_fa"),
+        gtf=cfg_path("gtf"),
+        upstream_qc=cfg_path("upstream_qc_metrics"),
+    output:
+        summary=stage("01_input_qc", "input_summary.json"),
+        metrics=stage("01_input_qc", "long_read_qc.tsv"),
+    log: str(LOG / "01_input_qc.log")
+    benchmark: str(LOG / "01_input_qc.benchmark.tsv")
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024), threads=1
+    shell:
+        "python pipeline/scripts/input_qc.py --config config/run.yaml "
+        "--summary {output.summary} --metrics {output.metrics} > {log} 2>&1"
+
+
+rule barcode_cdna:
+    input:
+        qc=stage("01_input_qc", "input_summary.json"),
+        barcode=cfg_path("upstream_barcode"),
+        structure=cfg_path("upstream_structure"),
+    output:
+        assignments=stage("02_barcode_cdna", "read_assignments.tsv.gz"),
+        summary=stage("02_barcode_cdna", "barcode_summary.json"),
+    log: str(LOG / "02_barcode_cdna.log")
+    benchmark: str(LOG / "02_barcode_cdna.benchmark.tsv")
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024), threads=1
+    shell:
+        "python pipeline/scripts/prepare_upstream_assignments.py --barcode {input.barcode} "
+        "--structure {input.structure} --output {output.assignments} --summary {output.summary} "
+        "> {log} 2>&1"
+
+
+rule alignment:
+    input:
+        assignments=stage("02_barcode_cdna", "read_assignments.tsv.gz"),
+        upstream_bam=cfg_path("upstream_bam"),
+        upstream_bai=cfg_path("upstream_bai"),
+    output:
+        bam=stage("03_alignment", f"{SAMPLE}.primary.bam"),
+        bai=stage("03_alignment", f"{SAMPLE}.primary.bam.bai"),
+        table=stage("03_alignment", "read_level.parquet"),
+    log: str(LOG / "03_alignment.log")
+    benchmark: str(LOG / "03_alignment.benchmark.tsv")
+    threads: int(CFG.get("threads", 4))
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024)
+    shell:
+        "python pipeline/scripts/alignment.py --config config/run.yaml "
+        "--assignments {input.assignments} --bam {output.bam} --bai {output.bai} "
+        "--table {output.table} --upstream-bam {input.upstream_bam} --upstream-bai {input.upstream_bai} "
+        "--threads {threads} > {log} 2>&1"
+
+
+rule isoform_calling:
+    input:
+        bam=stage("03_alignment", f"{SAMPLE}.primary.bam"),
+        bai=stage("03_alignment", f"{SAMPLE}.primary.bam.bai"),
+        assignments=stage("02_barcode_cdna", "read_assignments.tsv.gz"),
+    output:
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        novel=stage("04_isoform_calling", "high_confidence_novel_isoforms.tsv"),
+        method=stage("04_isoform_calling", "method_status.json"),
+        reads=stage("04_isoform_calling", "read_assignments.tsv.gz"),
+    log: str(LOG / "04_isoform_calling.log")
+    benchmark: str(LOG / "04_isoform_calling.benchmark.tsv")
+    threads: int(CFG.get("threads", 4))
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024)
+    shell:
+        "python pipeline/scripts/isoform_calling.py --config config/run.yaml "
+        "--bam {input.bam} --assignments {input.assignments} --isoforms {output.isoforms} "
+        "--novel {output.novel} --method {output.method} --reads {output.reads} "
+        "--outdir " + str(OUT / "04_isoform_calling" / "splisoquant") + " --threads {threads} > {log} 2>&1"
+
+
+rule matrices:
+    input:
+        reads=stage("03_alignment", "read_level.parquet"),
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        caller_reads=stage("04_isoform_calling", "read_assignments.tsv.gz"),
+    output:
+        gene=stage("05_matrices", "gene_x_spatial.tsv.gz"),
+        transcript=stage("05_matrices", "transcript_x_spatial.tsv.gz"),
+        isoform=stage("05_matrices", "isoform_x_spatial.tsv.gz"),
+        metadata=stage("05_matrices", "spatial_metadata.tsv"),
+    log: str(LOG / "05_matrices.log")
+    benchmark: str(LOG / "05_matrices.benchmark.tsv")
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024), threads=1
+    shell:
+        "python pipeline/scripts/matrices.py --config config/run.yaml "
+        "--reads {input.reads} --caller-reads {input.caller_reads} --isoforms {input.isoforms} "
+        "--gene {output.gene} --transcript {output.transcript} --isoform {output.isoform} "
+        "--metadata {output.metadata} > {log} 2>&1"
+
+
+rule isoform_events:
+    input:
+        reads=stage("03_alignment", "read_level.parquet"),
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        metadata=stage("05_matrices", "spatial_metadata.tsv"),
+    output:
+        status=stage("06_isoform_events", "event_status.json"),
+    log: str(LOG / "06_isoform_events.log")
+    benchmark: str(LOG / "06_isoform_events.benchmark.tsv")
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024), threads=1
+    shell:
+        "python pipeline/scripts/isoform_events.py --config config/run.yaml "
+        "--reads {input.reads} --isoforms {input.isoforms} --metadata {input.metadata} "
+        "--outdir " + str(OUT / "06_isoform_events") + " --status {output.status} > {log} 2>&1"
+
+
+rule spatial_isoform:
+    input:
+        isoform=stage("05_matrices", "isoform_x_spatial.tsv.gz"),
+        metadata=stage("05_matrices", "spatial_metadata.tsv"),
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+    output:
+        status=stage("07_spatial_isoform", "svi_status.json"),
+        stats=stage("07_spatial_isoform", "splisofind_all_bin_moransI.tsv"),
+    log: str(LOG / "07_spatial_isoform.log")
+    benchmark: str(LOG / "07_spatial_isoform.benchmark.tsv")
+    resources: mem_mb=int(float(CFG.get("memory_gb", 48)) * 1024), threads=1
+    shell:
+        "python pipeline/scripts/spatial_isoform.py --config config/run.yaml "
+        "--isoform {input.isoform} --metadata {input.metadata} --isoforms {input.isoforms} "
+        "--outdir " + str(OUT / "07_spatial_isoform") + " --status {output.status} --stats {output.stats} > {log} 2>&1"
+
+
+rule visualization:
+    input:
+        qc=stage("01_input_qc", "long_read_qc.tsv"),
+        barcode=stage("02_barcode_cdna", "barcode_summary.json"),
+        alignment=stage("03_alignment", "read_level.parquet"),
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        novel=stage("04_isoform_calling", "high_confidence_novel_isoforms.tsv"),
+        matrices=stage("05_matrices", "isoform_x_spatial.tsv.gz"),
+        events=stage("06_isoform_events", "event_status.json"),
+        svi=stage("07_spatial_isoform", "svi_status.json"),
+    output:
+        manifest=stage("08_visualization", "figure_manifest.tsv"),
+        status=stage("08_visualization", "visualization_status.json"),
+    log: str(LOG / "08_visualization.log")
+    benchmark: str(LOG / "08_visualization.benchmark.tsv")
+    resources: mem_mb=8192, threads=1
+    shell:
+        "python pipeline/scripts/build_visualizations.py --source-root " + str(OUT) + " "
+        "--legacy-root " + str(CFG["legacy_root"]) + " --outdir " + str(OUT / "08_visualization") + " --dpi 300 > {log} 2>&1"
+
+
+rule spliso_visualization:
+    input:
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        matrices=stage("05_matrices", "isoform_x_spatial.tsv.gz"),
+        metadata=stage("05_matrices", "spatial_metadata.tsv"),
+        method=stage("04_isoform_calling", "method_status.json"),
+        stats=stage("07_spatial_isoform", "splisofind_all_bin_moransI.tsv"),
+    output:
+        manifest=stage("09_spliso_visualization", "figure_manifest.tsv"),
+        status=stage("09_spliso_visualization", "visualization_status.json"),
+    log: str(LOG / "09_spliso_visualization.log")
+    benchmark: str(LOG / "09_spliso_visualization.benchmark.tsv")
+    resources: mem_mb=16384, threads=1
+    shell:
+        "python pipeline/scripts/build_spliso_visualizations.py --source-root " + str(OUT) + " "
+        "--outdir " + str(OUT / "09_spliso_visualization") + " --dpi 300 --max-isoforms 50 --nperm 999 --k 10 "
+        "--stats {input.stats} > {log} 2>&1"
+
+
+rule report:
+    input:
+        qc=stage("01_input_qc", "long_read_qc.tsv"),
+        isoforms=stage("04_isoform_calling", "all_isoforms.tsv"),
+        novel=stage("04_isoform_calling", "high_confidence_novel_isoforms.tsv"),
+        matrices=stage("05_matrices", "isoform_x_spatial.tsv.gz"),
+        events=stage("06_isoform_events", "event_status.json"),
+        svi=stage("07_spatial_isoform", "svi_status.json"),
+        legacy_figures=stage("08_visualization", "figure_manifest.tsv"),
+        spliso_figures=stage("09_spliso_visualization", "figure_manifest.tsv"),
+    output:
+        html=stage("10_report", f"{SAMPLE}_report.html"),
+        manifest=stage("10_report", "delivery_manifest.tsv"),
+        metadata=stage("10_report", "run_metadata.json"),
+    log: str(LOG / "10_report.log")
+    benchmark: str(LOG / "10_report.benchmark.tsv")
+    resources: mem_mb=4096, threads=1
+    shell:
+        "python pipeline/scripts/build_report.py --config config/run.yaml "
+        "--outdir " + str(OUT / "10_report") + " --qc {input.qc} --isoforms {input.isoforms} "
+        "--novel {input.novel} --matrices {input.matrices} --events {input.events} --svi {input.svi} "
+        "--figures {input.legacy_figures} --figures {input.spliso_figures} --run-metadata {output.metadata} > {log} 2>&1"

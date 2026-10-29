@@ -1,0 +1,32 @@
+name: iso-spatial-full-length
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - snakemake-minimal=8
+  - git
+  - r-base=4.4
+  - r-data.table
+  - r-matrix
+  - minimap2
+  - samtools
+  - bedtools
+  - gffread
+  - cutadapt
+  - edlib
+  - pysam
+  - numpy
+  - pandas
+  - scipy
+  - pyarrow
+  - matplotlib
+  - scanpy
+  - anndata
+  - squidpy
+  - plotly
+  - statsmodels
+  - isoquant
+  - pip
+  - pip:
+      - SplIsoFind==0.1.8

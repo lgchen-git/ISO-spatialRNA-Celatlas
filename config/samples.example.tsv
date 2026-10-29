@@ -1,0 +1,2 @@
+sample_id	fastq	chip_id	whitelist_csv	bbox_csv	barcode_to_pos_h5	species	chemistry	genome_fa	gtf	biological_replicate	section_id	tissue_image
+EXAMPLE_SAMPLE	inputs/EXAMPLE_SAMPLE/EXAMPLE_SAMPLE.fastq	EXAMPLE_CHIP	inputs/EXAMPLE_SAMPLE/whitelist.csv	inputs/EXAMPLE_SAMPLE/tissue_bbox.csv	inputs/EXAMPLE_SAMPLE/barcodeToPos.h5	Mus_musculus	BBV2.4	reference/Mus_musculus/genome.fa	reference/Mus_musculus/genes.gtf		EXAMPLE_SECTION	EXAMPLE_IMAGE

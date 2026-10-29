@@ -1,0 +1,61 @@
+project_id: iso_spatialrna_celatlas
+project_root: .
+inputs_root: inputs
+reference_root: reference
+log_root: log
+outputs_root: outputs
+pipeline_root: pipeline
+tmp_root: tmp
+snakefile: pipeline/Snakefile
+version_control: {system: git, required: true, dirty_policy: warn, provenance_file: git_provenance.tsv, release_tag_pattern: "pipeline-vX.Y.Z"}
+stages:
+  - number: "01"
+    id: input_qc
+    rule: input_qc
+    output_dir: 01_input_qc
+    final_report: false
+  - number: "02"
+    id: barcode_cdna
+    rule: barcode_cdna
+    output_dir: 02_barcode_cdna
+    final_report: false
+  - number: "03"
+    id: alignment
+    rule: alignment
+    output_dir: 03_alignment
+    final_report: false
+  - number: "04"
+    id: isoform_calling
+    rule: isoform_calling
+    output_dir: 04_isoform_calling
+    final_report: false
+  - number: "05"
+    id: matrices
+    rule: matrices
+    output_dir: 05_matrices
+    final_report: false
+  - number: "06"
+    id: isoform_events
+    rule: isoform_events
+    output_dir: 06_isoform_events
+    final_report: false
+  - number: "07"
+    id: spatial_isoform
+    rule: spatial_isoform
+    output_dir: 07_spatial_isoform
+    final_report: false
+  - number: "08"
+    id: visualization
+    rule: visualization
+    output_dir: 08_visualization
+    final_report: false
+  - number: "09"
+    id: spliso_visualization
+    rule: spliso_visualization
+    output_dir: 09_spliso_visualization
+    final_report: false
+  - number: "10"
+    id: report
+    rule: report
+    output_dir: 10_report
+    final_report: true
